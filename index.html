@@ -55,6 +55,24 @@
   .lab.on{ left:10px; color:#b9ffcd; }
   .lab.off{ right:10px; color:#ffb0b0; }
 
+  /* Controls panel */
+  .controls{
+    display:flex;
+    flex-wrap:wrap;
+    gap:16px;
+    margin-bottom:14px;
+    align-items:center;
+  }
+  .controls label{
+    font-size:13px;
+    display:flex;
+    flex-direction:column;
+    gap:4px;
+  }
+  .controls input[type="range"]{
+    width:160px;
+  }
+
   /* Stage */
   .stage{
     position:relative;
@@ -130,6 +148,13 @@
 
   /* Helpful cursor when dark */
   .stage[data-lights="off"]{ cursor: none; } /* hide to enhance immersion */
+
+  /* Responsive tweaks */
+  @media (max-width: 600px){
+    .bar{ flex-direction:column; align-items:flex-start; gap:8px; }
+    .controls{ flex-direction:column; align-items:stretch; }
+    .switch{ transform: scale(.9); }
+  }
 </style>
 </head>
 <body>
@@ -141,6 +166,14 @@
         <span class="lab on">ON</span>
         <span class="lab off">OFF</span>
       </button>
+    </div>
+    <div class="controls">
+      <label>Beam radius
+        <input id="radius" type="range" min="100" max="400" value="240">
+      </label>
+      <label>Softness
+        <input id="softness" type="range" min="0" max="1" step="0.01" value="0.5">
+      </label>
     </div>
 
     <div id="stage" class="stage loading" data-lights="on">
@@ -158,6 +191,8 @@
   const base  = $("#imgBase");
   const emis  = $("#imgEmission");
   const toggle = $("#toggle");
+  const radiusInput = $("#radius");
+  const softnessInput = $("#softness");
 
   // Detect mask-image support; add fallback class if missing
   const HAS_MASK = (()=>{
@@ -182,6 +217,10 @@
   toggle.addEventListener("click", ()=> setLights(!lightsOn));
   // Keyboard shortcut: L
   window.addEventListener("keydown", (e)=>{ if(e.key.toLowerCase()==="l") setLights(!lightsOn); });
+
+  // Range controls
+  radiusInput.addEventListener("input", (e)=>{ document.documentElement.style.setProperty("--beam-radius", e.target.value + "px"); });
+  softnessInput.addEventListener("input", (e)=>{ document.documentElement.style.setProperty("--beam-softness", e.target.value); });
 
   // Beam position/state (CSS variables on stage & overlays)
   const beamTargets = [stage, emis, stage.querySelector(".beam-tint")];
@@ -216,9 +255,11 @@
     const r = stage.getBoundingClientRect();
     const ideal = Math.max(180, Math.min(360, Math.round(Math.min(r.width, r.height) * 0.22)));
     document.documentElement.style.setProperty("--beam-radius", ideal + "px");
+    radiusInput.value = ideal;
   }
   window.addEventListener("resize", adaptRadius);
   adaptRadius();
+  softnessInput.value = getComputedStyle(document.documentElement).getPropertyValue("--beam-softness");
 })();
 </script>
 </body>
