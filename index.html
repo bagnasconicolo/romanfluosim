@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Mosaic • Blacklight Viewer</title>
+<style>
+  :root{
+    --beam-radius: 240px;        /* size of UV beam */
+    --beam-softness: 0.50;       /* 0..1, inner radius = r*(1-softness) */
+    --uv-tint: rgba(120,0,255,0.28);
+  }
+
+  /* Layout & look */
+  html,body{height:100%}
+  body{
+    margin:0;
+    color:#e7e7ea;
+    background: radial-gradient(1600px 900px at 20% -20%, #0b0c12, #0a0b13 40%, #070711);
+    font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap{
+    max-width: 1200px;
+    margin: 24px auto;
+    padding: 0 16px;
+  }
+
+  .bar{
+    display:flex; align-items:center; justify-content:space-between;
+    gap:12px; margin-bottom:14px;
+  }
+  .title{
+    font-size:clamp(18px,2.5vw,22px); font-weight:600; letter-spacing:.2px;
+    color:#fff; text-shadow:0 1px 10px rgba(0,0,0,.4);
+  }
+
+  /* Fancy switch */
+  .switch{
+    position:relative; width:86px; height:36px; border-radius:999px;
+    background:linear-gradient(180deg,#1f2330,#0f1118);
+    box-shadow: 0 1px 0 rgba(255,255,255,.08) inset, 0 10px 25px rgba(0,0,0,.45);
+    cursor:pointer; user-select:none; border:1px solid rgba(255,255,255,.08);
+  }
+  .knob{
+    position:absolute; top:3px; left:3px; width:30px; height:30px; border-radius:50%;
+    background:linear-gradient(180deg,#fff,#c9c9cc);
+    box-shadow: 0 6px 14px rgba(0,0,0,.35), 0 0 0 1px rgba(255,255,255,.45) inset;
+    transition: transform .24s ease;
+  }
+  .switch[data-on="true"] .knob{ transform: translateX(50px); }
+  .lab{
+    position:absolute; top:50%; transform:translateY(-50%); font-weight:600; font-size:12px;
+    letter-spacing:.8px; opacity:.8; pointer-events:none;
+  }
+  .lab.on{ left:10px; color:#b9ffcd; }
+  .lab.off{ right:10px; color:#ffb0b0; }
+
+  /* Stage */
+  .stage{
+    position:relative;
+    aspect-ratio: 4 / 3;           /* responsive; fits your image well */
+    width:100%;
+    overflow:hidden;
+    border-radius:22px;
+    background:#000;
+    border:1px solid rgba(255,255,255,.1);
+    box-shadow: 0 40px 80px rgba(0,0,0,.55), 0 2px 0 rgba(255,255,255,.06) inset;
+    touch-action:none;             /* we handle move ourselves */
+  }
+  .img, .emission, .vignette, .beam-tint{
+    position:absolute; inset:0; width:100%; height:100%; object-fit:contain; pointer-events:none;
+  }
+
+  /* Normal lighting vs dark room */
+  .stage[data-lights="on"] .img{ filter: brightness(1) contrast(1); }
+  .stage[data-lights="off"] .img{ filter: brightness(.20) contrast(1); transition: filter .18s ease; }
+
+  /* Emission overlay: shown only when lights are off */
+  .emission{ mix-blend-mode: screen; opacity:1; display:none; }
+  .stage[data-lights="off"] .emission{ display:block; }
+
+  /* Radial mask that follows the pointer */
+  .emission{
+    --cx: 50%; --cy: 50%;                             /* updated by JS */
+    --r: var(--beam-radius);
+    --ri: calc(var(--r) * (1 - var(--beam-softness)));
+    -webkit-mask-image: radial-gradient(circle at var(--cx) var(--cy),
+                         rgba(255,255,255,1) 0,
+                         rgba(255,255,255,1) var(--ri),
+                         rgba(255,255,255,0) var(--r));
+            mask-image: radial-gradient(circle at var(--cx) var(--cy),
+                         rgba(255,255,255,1) 0,
+                         rgba(255,255,255,1) var(--ri),
+                         rgba(255,255,255,0) var(--r));
+    -webkit-mask-composite: source-over;
+            mask-composite: intersect;
+  }
+
+  /* Visual UV beam tint */
+  .beam-tint{
+    --cx: 50%; --cy: 50%; 
+    --r: calc(var(--beam-radius) * 1.1);
+    background: radial-gradient(circle at var(--cx) var(--cy),
+                 var(--uv-tint) 0,
+                 var(--uv-tint) calc(var(--r) * .35),
+                 rgba(0,0,0,0) var(--r));
+    display:none;
+  }
+  .stage[data-lights="off"] .beam-tint{ display:block; }
+
+  /* Subtle vignette */
+  .vignette{
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0) 62%, rgba(0,0,0,.45) 100%);
+    mix-blend-mode: multiply;
+  }
+
+  /* Fallback when CSS mask-image unsupported: hard-edged beam */
+  .no-mask .emission{
+    -webkit-mask-image:none; mask-image:none;
+    clip-path: circle(var(--beam-radius) at var(--cx) var(--cy));
+  }
+
+  /* Loading overlay (brief while images decode) */
+  .loading::after{
+    content:'Loading images…';
+    position:absolute; inset:0; display:grid; place-items:center;
+    color:#cbd5e1; background:linear-gradient(180deg, rgba(20,22,30,.8), rgba(8,9,12,.8));
+    letter-spacing:.8px; font-weight:600;
+  }
+
+  /* Helpful cursor when dark */
+  .stage[data-lights="off"]{ cursor: none; } /* hide to enhance immersion */
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="bar">
+      <div class="title">Blacklight Viewer</div>
+      <button id="toggle" class="switch" data-on="true" aria-pressed="true" aria-label="Toggle lights">
+        <span class="knob"></span>
+        <span class="lab on">ON</span>
+        <span class="lab off">OFF</span>
+      </button>
+    </div>
+
+    <div id="stage" class="stage loading" data-lights="on">
+      <img id="imgBase" class="img" src="mosaic.png" alt="Mosaic" />
+      <img id="imgEmission" class="emission" src="fluo.png" alt="Fluorescence overlay" />
+      <div class="beam-tint"></div>
+      <div class="vignette"></div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const $ = (sel)=>document.querySelector(sel);
+  const stage = $("#stage");
+  const base  = $("#imgBase");
+  const emis  = $("#imgEmission");
+  const toggle = $("#toggle");
+
+  // Detect mask-image support; add fallback class if missing
+  const HAS_MASK = (()=>{
+    const s = (p) => CSS && CSS.supports && CSS.supports(p);
+    return s("(mask-image: radial-gradient(white, black))") ||
+           s("(-webkit-mask-image: radial-gradient(white, black))");
+  })();
+  if (!HAS_MASK) document.body.classList.add("no-mask");
+
+  // When both images are decoded, remove loading overlay
+  Promise.allSettled([base.decode().catch(()=>{}), emis.decode().catch(()=>{})])
+    .finally(()=> stage.classList.remove("loading"));
+
+  // Light switch
+  let lightsOn = true;
+  function setLights(on){
+    lightsOn = on;
+    stage.setAttribute("data-lights", on ? "on" : "off");
+    toggle.setAttribute("data-on", on ? "true" : "false");
+    toggle.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+  toggle.addEventListener("click", ()=> setLights(!lightsOn));
+  // Keyboard shortcut: L
+  window.addEventListener("keydown", (e)=>{ if(e.key.toLowerCase()==="l") setLights(!lightsOn); });
+
+  // Beam position/state (CSS variables on stage & overlays)
+  const beamTargets = [stage, emis, stage.querySelector(".beam-tint")];
+
+  function setBeam(x, y){
+    // clamp to stage bounds
+    const r = stage.getBoundingClientRect();
+    const nx = Math.max(0, Math.min(1, (x - r.left) / r.width));
+    const ny = Math.max(0, Math.min(1, (y - r.top)  / r.height));
+    const cx = (nx * 100).toFixed(4) + "%";
+    const cy = (ny * 100).toFixed(4) + "%";
+    for(const el of beamTargets){
+      el && el.style.setProperty("--cx", cx);
+      el && el.style.setProperty("--cy", cy);
+    }
+  }
+
+  // Update beam on pointer move (only when lights are OFF)
+  function handleMove(clientX, clientY){
+    if (!lightsOn) setBeam(clientX, clientY);
+  }
+  stage.addEventListener("pointermove", (e)=> handleMove(e.clientX, e.clientY), {passive:true});
+  stage.addEventListener("pointerdown", (e)=> { stage.setPointerCapture(e.pointerId); handleMove(e.clientX, e.clientY); });
+  stage.addEventListener("pointerup",   (e)=> { try{ stage.releasePointerCapture(e.pointerId); }catch(_){} });
+  stage.addEventListener("mouseleave",  ()=> { /* park at center */ setBeam(window.innerWidth/2, window.innerHeight/2); });
+
+  // Initial beam center
+  setBeam(window.innerWidth/2, window.innerHeight/2);
+
+  // Optional: adapt beam radius to viewport for nicer defaults
+  function adaptRadius(){
+    const r = stage.getBoundingClientRect();
+    const ideal = Math.max(180, Math.min(360, Math.round(Math.min(r.width, r.height) * 0.22)));
+    document.documentElement.style.setProperty("--beam-radius", ideal + "px");
+  }
+  window.addEventListener("resize", adaptRadius);
+  adaptRadius();
+})();
+</script>
+</body>
+</html>
